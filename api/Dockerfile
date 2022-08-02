@@ -66,10 +66,10 @@ RUN apk del .build-deps
 
 # copy la bonne version du php.ini
 RUN ln -s $PHP_INI_DIR/php.ini-production $PHP_INI_DIR/php.ini
-COPY ../_config/php/conf.d/api.prod.ini $PHP_INI_DIR/conf.d/api.ini
+COPY docker/php/conf.d/api.prod.ini $PHP_INI_DIR/conf.d/api.ini
 
 # ca modifie la conf de php-fpm, mais ca a toujours du sens si l'image n'est pas fpm ?
-COPY ../_config/php/php-fpm.d/zz-docker.conf /usr/local/etc/php-fpm.d/zz-docker.conf
+COPY docker/php/php-fpm.d/zz-docker.conf /usr/local/etc/php-fpm.d/zz-docker.conf
 
 VOLUME /var/run/php
 
