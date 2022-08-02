@@ -39,6 +39,8 @@ services:
       - "${API_PORT_PUBISHED}:${API_PORT_TARGET}"
     volumes:
       - socket_data:/var/run/php
+      - ./:/srv/app
+      - ./docker/php/conf.d/symfony.dev.ini:/usr/local/etc/php/conf.d/symfony.ini
     networks:
       - api_network
 
