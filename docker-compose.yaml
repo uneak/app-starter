@@ -5,11 +5,15 @@ services:
     image: ${PROJECT_NAME}-api:latest
     build:
       context: ./api
-      target: php_stage
+      target: api_stage
       args:
         - APP_ENV=${APP_ENV}
         - PHP_VERSION=${PHP_VERSION}
         - SYMFONY_PHPUNIT_VERSION=${SYMFONY_PHPUNIT_VERSION}
+        - APCU_VERSION=${APCU_VERSION}
+        - SKELETON=${SYMFONY_SKELETON}
+        - STABILITY=${SYMFONY_STABILITY}
+        - SYMFONY_VERSION=${SYMFONY_VERSION}
     restart: unless-stopped
     env_file:
       - .env
@@ -17,34 +21,53 @@ services:
       - APP_ENV=${APP_ENV}
       - PHP_VERSION=${PHP_VERSION}
       - SYMFONY_PHPUNIT_VERSION=${SYMFONY_PHPUNIT_VERSION}
+      - APCU_VERSION=${APCU_VERSION}
+      - SKELETON=${SYMFONY_SKELETON}
+      - STABILITY=${SYMFONY_STABILITY}
+      - SYMFONY_VERSION=${SYMFONY_VERSION}
       - DATABASE_URL=${DATABASE_URL}
       - TRUSTED_PROXIES=${TRUSTED_PROXIES}
       - TRUSTED_HOSTS=${SERVER_NAME}
+    healthcheck:
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     depends_on:
       - database
     ports:
       - "${API_PORT_PUBISHED}:${API_PORT_TARGET}"
     volumes:
       - socket_data:/var/run/php
+    networks:
+      - api_network
 
-  # nginx:
-  #   image: ${PROJECT_NAME}-nginx:latest
-  #   build:
-  #     context: ./docker/
-  #     args:
-  #       BUILD_ARGUMENT_ENV: dev
-  #     dockerfile: ./nginx/Dockerfile
-  #   container_name: ${COMPOSE_PROJECT_NAME}_nginx
-  #   restart: always
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
-  #   volumes:
-  #     - .:/var/www/html:ro,cached
-  #   depends_on:
-  #     - api
-  #   networks:
-  #     - symfony
+  nginx:
+    container_name: nginx
+    image: ${PROJECT_NAME}-nginx:latest
+    build:
+      context: ./api
+      target: nginx_stage
+      args:
+        - APP_ENV=${APP_ENV}
+        - NGINX_VERSION=${NGINX_VERSION}
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=${APP_ENV}
+      - NGINX_VERSION=${NGINX_VERSION}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - .:/var/www/html:ro,cached
+    depends_on:
+      - api
+    networks:
+      - api_network
+
+
 
   # mailer:
   #     image: schickling/mailcatcher
@@ -67,6 +90,8 @@ services:
       # - ./api/docker/db/data:/var/lib/postgresql/data:rw
     ports:
       - "${POSTGRES_PORT_PUBISHED}:${POSTGRES_PORT_TARGET}"
+    networks:
+      - api_network
 
   database_admin:
     container_name: database_admin
@@ -79,6 +104,11 @@ services:
       - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD}
     ports:
       - "${PGADMIN_PORT_PUBISHED}:${PGADMIN_PORT_TARGET}"
+    networks:
+      - api_network
+
+networks:
+  api_network:
 
 volumes:
   database_data:

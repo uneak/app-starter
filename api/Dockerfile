@@ -1,96 +1,87 @@
-# 
-ARG PHP_VERSION=8.1.8-alpine
+# the different stages of this Dockerfile are meant to be built into separate images
+# https://docs.docker.com/develop/develop-images/multistage-build/#stop-at-a-specific-build-stage
+# https://docs.docker.com/compose/compose-file/#target
+
+
+# https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
+ARG PHP_VERSION=8.1-fpm-alpine
+ARG NGINX_VERSION=alpine
 
 ##
 ## "php" stage
 ##
-FROM php:${PHP_VERSION} as php_stage
+FROM php:${PHP_VERSION} AS php_stage
 
 # persistent / runtime deps
 RUN apk add --no-cache \
-    acl \
-    fcgi \
-    file \
-    gettext \
-    git \
-    gnu-libiconv \
-    ;
+		acl \
+		fcgi \
+		file \
+		gettext \
+		git \
+	;
 
-# install gnu-libiconv and set LD_PRELOAD env to make iconv work fully on Alpine image.
-# see https://github.com/docker-library/php/issues/240#issuecomment-763112749
-ENV LD_PRELOAD /usr/lib/preloadable_libiconv.so
+ARG APCU_VERSION=5.1.21
 
-# install des dependences de l'application symfony 'api'
 RUN set -eux; \
-    apk add --no-cache --virtual .build-deps \
-    $PHPIZE_DEPS \
-    icu-dev \
-    libzip-dev \
-    zlib-dev \
-    rabbitmq-c-dev \
-    ;
+	apk add --no-cache --virtual .build-deps \
+		$PHPIZE_DEPS \
+		icu-data-full \
+		icu-dev \
+		libzip-dev \
+		zlib-dev \
+		rabbitmq-c-dev \
+	; \
+	\
+	docker-php-ext-configure zip; \
+	docker-php-ext-install -j$(nproc) \
+		intl \
+		zip \
+	; \
+	pecl install \
+	    amqp \
+		apcu-${APCU_VERSION} \
+	; \
+	pecl clear-cache; \
+	docker-php-ext-enable \
+	    amqp \
+		apcu \
+		opcache \
+	; \
+	\
+	runDeps="$( \
+		scanelf --needed --nobanner --format '%n#p' --recursive /usr/local/lib/php/extensions \
+			| tr ',' '\n' \
+			| sort -u \
+			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
+	)"; \
+	apk add --no-cache --virtual .phpexts-rundeps $runDeps; \
+	\
+	apk del .build-deps
 
-# configuration et installation des modules PHP
-RUN docker-php-ext-configure zip;
-RUN docker-php-ext-install -j$(nproc) \
-    intl \
-    zip \
-    ;
+COPY docker/php/docker-healthcheck.sh /usr/local/bin/docker-healthcheck
+RUN chmod +x /usr/local/bin/docker-healthcheck
 
-# install via PECL (quoi ?? prrrt)
-RUN pecl install \
-    amqp \
-    apcu-${APCU_VERSION} \
-    ;
+HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD ["docker-healthcheck"]
 
-RUN pecl clear-cache;
+RUN mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+COPY docker/php/conf.d/symfony.prod.ini $PHP_INI_DIR/conf.d/symfony.ini
 
-# activation des dépendances php
-RUN docker-php-ext-enable \
-    amqp \
-    apcu \
-    opcache \
-    ; 
-
-# liste les dépendances
-RUN runDeps="$( \
-    scanelf --needed --nobanner --format '%n#p' --recursive /usr/local/lib/php/extensions \
-    | tr ',' '\n' \
-    | sort -u \
-    | awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
-    )";
-
-# utilise la liste pour ??
-RUN apk add --no-cache --virtual .api-phpexts-rundeps $runDeps;
-RUN apk del .build-deps
-
-# copy la bonne version du php.ini
-RUN ln -s $PHP_INI_DIR/php.ini-production $PHP_INI_DIR/php.ini
-COPY docker/php/conf.d/api.prod.ini $PHP_INI_DIR/conf.d/api.ini
-
-# ca modifie la conf de php-fpm, mais ca a toujours du sens si l'image n'est pas fpm ?
 COPY docker/php/php-fpm.d/zz-docker.conf /usr/local/etc/php-fpm.d/zz-docker.conf
+
+COPY docker/php/docker-entrypoint.sh /usr/local/bin/docker-entrypoint
+RUN chmod +x /usr/local/bin/docker-entrypoint
 
 VOLUME /var/run/php
 
-
-# Installation de composer
-RUN curl -sS https://getcomposer.org/installer | php -- \
-    &&  mv composer.phar /usr/local/bin/composer
-
-# Installation de la commande Symfony
-RUN curl -sS https://get.symfony.com/cli/installer | bash \
-    &&  mv /root/.symfony/bin/symfony /usr/local/bin
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 # https://getcomposer.org/doc/03-cli.md#composer-allow-superuser
 ENV COMPOSER_ALLOW_SUPERUSER=1
+
 ENV PATH="${PATH}:/root/.composer/vendor/bin"
 
-# install yarn
-RUN npm install --global yarn
-
-WORKDIR /srv/api
-
+WORKDIR /srv/app
 
 
 
@@ -99,50 +90,65 @@ WORKDIR /srv/api
 ##
 FROM php_stage as api_stage
 
-# build for production
-ARG APP_ENV=prod
-ARG SYMFONY_PHPUNIT_VERSION=9
+# Allow to choose skeleton
+ARG SKELETON="symfony/skeleton"
+ENV SKELETON ${SKELETON}
 
-# installation des dependances symfony
-# prevent the reinstallation of vendors at every changes in the source code
-COPY composer.json composer.lock symfony.lock ./
-RUN set -eux;
-RUN composer install --prefer-dist --no-dev --no-scripts --no-progress;
-RUN composer clear-cache
+# Allow to use development versions of Symfony
+ARG STABILITY="stable"
+ENV STABILITY ${STABILITY}
 
+# Allow to select skeleton version
+ARG SYMFONY_VERSION=""
+ENV SYMFONY_VERSION ${SYMFONY_VERSION}
 
-# copy uniquement ce dont l'application à besoin
-# COPY .env ./
-# COPY bin bin/
-# COPY config config/
-# COPY migrations migrations/
-# COPY public public/
-# COPY src src/
-# COPY templates templates/
+# Download the Symfony skeleton and leverage Docker cache layers
+RUN composer create-project "${SKELETON} ${SYMFONY_VERSION}" . --stability=$STABILITY --prefer-dist --no-dev --no-progress --no-interaction; \
+	composer clear-cache
 
+###> recipes ###
+###< recipes ###
 
-# creer les répertoire de caches, dump je ne sais quoi, lance le script post-install et rend la console symfony executabe
+COPY . .
+
 RUN set -eux; \
-    mkdir -p var/cache var/log; \
-    composer dump-autoload --classmap-authoritative --no-dev; \
-    composer dump-env prod; \
-    composer run-script --no-dev post-install-cmd; \
-    chmod +x bin/console; sync
-
-VOLUME /srv/api/var
-
-# healthcheck ??, on verra apres ce que c'est
-# COPY ../_config/php/docker-healthcheck.sh /usr/local/bin/docker-healthcheck
-# RUN chmod +x /usr/local/bin/docker-healthcheck
-# HEALTHCHECK --interval=10s --timeout=3s --retries=3 CMD ["docker-healthcheck"]
-
-
-# copy le script entrypoint et le rend executable
-COPY ../_config/php/docker-entrypoint.sh /usr/local/bin/docker-entrypoint
-RUN chmod +x /usr/local/bin/docker-entrypoint
-
-# pass la variable SYMFONY_PHPUNIT_VERSION a l'env du container
-ENV SYMFONY_PHPUNIT_VERSION $SYMFONY_PHPUNIT_VERSION
+	mkdir -p var/cache var/log; \
+	composer install --prefer-dist --no-dev --no-progress --no-scripts --no-interaction; \
+	composer dump-autoload --classmap-authoritative --no-dev; \
+	composer symfony:dump-env prod; \
+	composer run-script --no-dev post-install-cmd; \
+	chmod +x bin/console; sync
+VOLUME /srv/app/var
 
 ENTRYPOINT ["docker-entrypoint"]
-# CMD ["php-fpm"]
+CMD ["php-fpm"]
+
+
+
+
+##
+## "nginx" stage
+##
+FROM nginx:${NGINX_VERSION} as nginx_stage
+
+# set main params
+# ARG BUILD_ARGUMENT_ENV=dev
+# ENV ENV=$BUILD_ARGUMENT_ENV
+
+RUN ln -sf /dev/stdout /var/log/nginx/access.log && \
+    ln -sf /dev/stderr /var/log/nginx/error.log && \
+    rm -rf /etc/nginx/conf.d/*
+
+# # install openssl
+# RUN apk add --update openssl && \
+#     rm -rf /var/cache/apk/*
+
+# # create folder for certificates
+# RUN mkdir -p /etc/nginx/certificates
+
+# # generate certificates
+# # TODO: change it and make additional logic for production environment
+# RUN openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/nginx/certificates/key.pem -out /etc/nginx/certificates/cert.pem -subj "/C=AT/ST=Vienna/L=Vienna/O=Security/OU=Development/CN=example.com"
+
+# put nginx config
+COPY docker/nginx/nginx.conf /etc/nginx/conf.d/default.conf
