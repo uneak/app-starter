@@ -17,17 +17,6 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    environment:
-      - APP_ENV=${APP_ENV}
-      - PHP_VERSION=${PHP_VERSION}
-      - SYMFONY_PHPUNIT_VERSION=${SYMFONY_PHPUNIT_VERSION}
-      - APCU_VERSION=${APCU_VERSION}
-      - SKELETON=${SYMFONY_SKELETON}
-      - STABILITY=${SYMFONY_STABILITY}
-      - SYMFONY_VERSION=${SYMFONY_VERSION}
-      - DATABASE_URL=${DATABASE_URL}
-      - TRUSTED_PROXIES=${TRUSTED_PROXIES}
-      - TRUSTED_HOSTS=${SERVER_NAME}
     healthcheck:
       interval: 10s
       timeout: 3s
@@ -53,23 +42,57 @@ services:
       args:
         - APP_ENV=${APP_ENV}
         - NGINX_VERSION=${NGINX_VERSION}
+        - NGINX_HTTP_PORT_PUBISHED=${NGINX_HTTP_PORT_PUBISHED}
+        - NGINX_HTTPS_PORT_PUBISHED=${NGINX_HTTPS_PORT_PUBISHED}
+        - API_PORT_PUBISHED=${API_PORT_PUBISHED}
     restart: always
     env_file:
       - .env
-    environment:
-      - APP_ENV=${APP_ENV}
-      - NGINX_VERSION=${NGINX_VERSION}
     ports:
-      - "80:80"
-      - "443:443"
+      - "${NGINX_HTTP_PORT_PUBISHED}:${NGINX_HTTP_PORT_TARGET}"
+      - "${NGINX_HTTPS_PORT_PUBISHED}:${NGINX_HTTPS_PORT_TARGET}"
     volumes:
       - .:/var/www/html:ro,cached
+      - ./api/docker/nginx/nginx.conf:/etc/nginx/templates/default.conf.template
     depends_on:
       - api
     networks:
       - api_network
 
-
+  caddy:
+    container_name: caddy
+    image: ${PROJECT_NAME}-caddy:latest
+    build:
+      context: .
+      target: caddy_stage
+      args:
+        - CADDY_VERSION=${CADDY_VERSION}
+        - API_PATH=${API_PATH}
+        - ADMIN_PATH=${ADMIN_PATH}
+        - SERVER_NAME=${SERVER_NAME}
+        - CADDY_HTTP_PORT_PUBISHED=${CADDY_HTTP_PORT_PUBISHED}
+        - CADDY_HTTPS_PORT_PUBISHED=${CADDY_HTTPS_PORT_PUBISHED}
+        - CADDY_HTTP3_PORT_PUBISHED=${CADDY_HTTP3_PORT_PUBISHED}
+        - WEB_BACKEND_PORT_PUBISHED=${WEB_BACKEND_PORT_PUBISHED}
+        - WEB_FRONTEND_PORT_PUBISHED=${WEB_FRONTEND_PORT_PUBISHED}
+        - NGINX_HTTP_PORT_PUBISHED=${NGINX_HTTP_PORT_PUBISHED}
+    depends_on:
+      - nginx
+    env_file:
+      - .env
+    restart: unless-stopped
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      # HTTP
+      - "${CADDY_HTTP_PORT_PUBISHED}:${CADDY_HTTP_PORT_TARGET}/tcp"
+      # HTTPS
+      - "${CADDY_HTTPS_PORT_PUBISHED}:${CADDY_HTTPS_PORT_TARGET}/tcp"
+      # HTTP/3
+      - "${CADDY_HTTP3_PORT_PUBISHED}:${CADDY_HTTP3_PORT_TARGET}/udp"
+    networks:
+      - api_network
 
   # mailer:
   #     image: schickling/mailcatcher
@@ -81,11 +104,6 @@ services:
     restart: always
     env_file:
       - .env
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB}
-      # You should definitely change the password in production
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_USER=${POSTGRES_USER}
     volumes:
       - database_data:/var/lib/postgresql/data:rw
       # you may use a bind-mounted host directory instead, so that it is harder to accidentally remove the volume and lose all your data!
@@ -101,9 +119,6 @@ services:
     restart: always
     env_file:
       - .env
-    environment:
-      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_DEFAULT_EMAIL}
-      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_DEFAULT_PASSWORD}
     ports:
       - "${PGADMIN_PORT_PUBISHED}:${PGADMIN_PORT_TARGET}"
     networks:
@@ -112,6 +127,9 @@ services:
 networks:
   api_network:
 
+
 volumes:
   database_data:
   socket_data:
+  caddy_data:
+  caddy_config:

@@ -4,13 +4,13 @@
 
 
 # https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
-ARG PHP_VERSION=8.1-fpm-alpine
+ARG PHP_VERSION=8.1
 ARG NGINX_VERSION=alpine
 
 ##
 ## "php" stage
 ##
-FROM php:${PHP_VERSION} AS php_stage
+FROM php:${PHP_VERSION}-fpm-alpine AS php_stage
 
 # persistent / runtime deps
 RUN apk add --no-cache \
@@ -81,8 +81,6 @@ ENV COMPOSER_ALLOW_SUPERUSER=1
 
 ENV PATH="${PATH}:/root/.composer/vendor/bin"
 
-WORKDIR /srv/app
-
 
 
 ##
@@ -102,9 +100,12 @@ ENV STABILITY ${STABILITY}
 ARG SYMFONY_VERSION=""
 ENV SYMFONY_VERSION ${SYMFONY_VERSION}
 
+WORKDIR /srv/app
+
 # Download the Symfony skeleton and leverage Docker cache layers
-RUN composer create-project "${SKELETON} ${SYMFONY_VERSION}" . --stability=$STABILITY --prefer-dist --no-dev --no-progress --no-interaction; \
-	composer clear-cache
+RUN composer create-project "${SKELETON} ${SYMFONY_VERSION}" . --stability=$STABILITY --prefer-dist --no-dev --no-progress --no-interaction;
+RUN composer clear-cache
+
 
 ###> recipes ###
 ###< recipes ###
@@ -118,6 +119,7 @@ RUN set -eux; \
 	composer symfony:dump-env prod; \
 	composer run-script --no-dev post-install-cmd; \
 	chmod +x bin/console; sync
+
 VOLUME /srv/app/var
 
 ENTRYPOINT ["docker-entrypoint"]
@@ -134,6 +136,18 @@ FROM nginx:${NGINX_VERSION} as nginx_stage
 # set main params
 # ARG BUILD_ARGUMENT_ENV=dev
 # ENV ENV=$BUILD_ARGUMENT_ENV
+
+
+ARG APP_ENV=dev
+ENV APP_ENV=$APP_ENV
+ARG NGINX_HTTP_PORT_PUBISHED
+ENV NGINX_HTTP_PORT_PUBISHED=$NGINX_HTTP_PORT_PUBISHED
+ARG NGINX_HTTPS_PORT_PUBISHED
+ENV NGINX_HTTPS_PORT_PUBISHED=$NGINX_HTTPS_PORT_PUBISHED
+
+ARG API_PORT_PUBISHED
+ENV API_PORT_PUBISHED=$API_PORT_PUBISHED
+
 
 RUN ln -sf /dev/stdout /var/log/nginx/access.log && \
     ln -sf /dev/stderr /var/log/nginx/error.log && \
